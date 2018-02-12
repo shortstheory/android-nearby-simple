@@ -57,9 +57,26 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_COARSE_LOCATION},
                     0);
         }
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                    0);
+        }
+        if (ContextCompat.checkSelfPermission(this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    0);
+        }
+        final String TAG = "app";
+        mConnectionClient = Nearby.getConnectionsClient(this);
+        Log.d("app", "wofo: " + permissionCheck);
+        startAdvertising();
+        startDiscovery();
 
         Button button = (Button) findViewById(R.id.mybutton);
-
+        Button sendMsg = findViewById(R.id.send_msg);
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -67,10 +84,13 @@ public class MainActivity extends AppCompatActivity {
                 showImageChooser(connectedEndpoint);
             }
         });
-        mConnectionClient = Nearby.getConnectionsClient(this);
-        Log.d("app", "wofo: " + permissionCheck);
-        startAdvertising();
-        startDiscovery();
+        sendMsg.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Log.d(TAG, "pressed button");
+                sendWelcomeMessage();
+            }
+        });
     }
 
     @Override
@@ -92,30 +112,37 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendWelcomeMessage() {
-        String welcome = "welcome2beconnected from " + codeName;
+        String welcome = "welcome2beconnected from " + codeName + " to " + connectedEndpoint;
         mConnectionClient.sendPayload(connectedEndpoint, Payload.fromBytes(welcome.getBytes(UTF_8)));
     }
 
     private static final int READ_REQUEST_CODE = 42;
+    final static int PICK_IMAGE = 1; // required for getting the result from the image picker intent
 
     private void showImageChooser(String endpointId) {
         Log.d("app", "endpnt id" + endpointId);
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
+//        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        Intent intent = new Intent();
+
         intent.setType("image/*");
+        intent.setAction(Intent.ACTION_GET_CONTENT);
+        startActivityForResult(Intent.createChooser(intent, "Select Picture"), PICK_IMAGE);
+        //        intent.addCategory(Intent.CATEGORY_OPENABLE);
+//        intent.setType("image/*");
         intent.putExtra("endpointId", endpointId);
-        startActivityForResult(intent, READ_REQUEST_CODE);
+//        startActivityForResult(intent, READ_REQUEST_CODE);
     }
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent resultData) {
-        if (requestCode == READ_REQUEST_CODE && resultCode == this.RESULT_OK) {
+        if (requestCode == PICK_IMAGE && resultCode == this.RESULT_OK) {
             if (resultData != null) {
                 Log.d("app", "Got a data");
                 String endpointId = resultData.getStringExtra("endpointId");
 
                 // The URI of the file selected by the user.
                 Uri uri = resultData.getData();
+                Log.d("app", "chosen uri" + uri.toString());
 
                 // Open the ParcelFileDescriptor for this URI with read access.
                 try {
@@ -123,16 +150,18 @@ public class MainActivity extends AppCompatActivity {
                     Payload filePayload = Payload.fromFile(pfd);
 
                     // Construct a simple message mapping the ID of the file payload to the desired filename.
-                    String payloadFilenameMessage = filePayload.getId() + ":" + uri.getLastPathSegment();
+//                    String payloadFilenameMessage = filePayload.getId() + ":" + uri.getLastPathSegment();
 
                     // Send this message as a bytes payload.
-                    mConnectionClient.sendPayload(
-                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
-
+//                    mConnectionClient.sendPayload(
+//                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
+                    Payload.File file = filePayload.asFile();
                     // Finally, send the file payload.
-                    mConnectionClient.sendPayload(endpointId, filePayload);
+                    mConnectionClient.sendPayload(connectedEndpoint, filePayload);
+//                    Log.d("app", "successful send" + payloadFilenameMessage + " size " + file.getSize());
+                    Log.d("app", "successful send to " + connectedEndpoint + " size " + file.getSize());
                 } catch (Exception e) {
-
+                    Log.d("app", "failsend" + e.getMessage());
                 }
             }
         }
@@ -163,23 +192,26 @@ public class MainActivity extends AppCompatActivity {
 
     private final PayloadCallback mPayloadCallback =
             new PayloadCallback() {
-                private final SimpleArrayMap<Long, Payload> incomingPayloads = new SimpleArrayMap<>();
-                private final SimpleArrayMap<Long, String> filePayloadFilenames = new SimpleArrayMap<>();
+//                private final SimpleArrayMap<Long, Payload> incomingPayloads = new SimpleArrayMap<>();
+//                private final SimpleArrayMap<Long, String> filePayloadFilenames = new SimpleArrayMap<>();
 
                 @Override
                 public void onPayloadReceived(String endpointId, Payload payload) {
+                    Log.d("app", "getting a payload");
                     if (payload.getType() == Payload.Type.BYTES) {
                         try {
-                            Log.d("app", "Getting a byte pyalod");
                             String payloadFilenameMessage = new String(payload.asBytes(), "UTF-8");
-                            addPayloadFilename(payloadFilenameMessage);
+
+                            Log.d("app", "Getting a byte pyalod" + payloadFilenameMessage);
+//                            addPayloadFilename(payloadFilenameMessage);
                         } catch (Exception e) {
 
                         }
                     } else if (payload.getType() == Payload.Type.FILE) {
                         Log.d("app", "Getting a file pyalod");
+                        
                         // Add this to our tracking map, so that we can retrieve the payload later.
-                        incomingPayloads.put(new Long(payload.getId()), payload);
+//                        incomingPayloads.put(new Long(payload.getId()), payload);
                     }
                 }
 
@@ -191,25 +223,26 @@ public class MainActivity extends AppCompatActivity {
                     int colonIndex = payloadFilenameMessage.indexOf(':');
                     String payloadId = payloadFilenameMessage.substring(0, colonIndex);
                     String filename = payloadFilenameMessage.substring(colonIndex + 1);
-                    filePayloadFilenames.put(Long.parseLong(payloadId), filename);
+//                    filePayloadFilenames.put(Long.parseLong(payloadId), filename);
                 }
 
                 @Override
                 public void onPayloadTransferUpdate(String payloadId, PayloadTransferUpdate update) {
                     if (update.getStatus() == PayloadTransferUpdate.Status.SUCCESS) {
-                        Payload payload = incomingPayloads.remove(payloadId);
-                        if (payload.getType() == Payload.Type.FILE) {
-                            // Retrieve the filename that was received in a bytes payload.
-                            String newFilename = filePayloadFilenames.remove(payloadId);
-
-                            File payloadFile = payload.asFile().asJavaFile();
-
-                            // Rename the file.
-                            payloadFile.renameTo(new File(payloadFile.getParentFile(), newFilename));
-                        }
+                        Log.d("app", "transfer done");
+                        //                        Payload payload = incomingPayloads.remove(payloadId);
+//                        if (payload.getType() == Payload.Type.FILE) {
+//                            // Retrieve the filename that was received in a bytes payload.
+//                            String newFilename = filePayloadFilenames.remove(payloadId);
+//
+//                            File payloadFile = payload.asFile().asJavaFile();
+//
+//                            // Rename the file.
+//                            payloadFile.renameTo(new File(payloadFile.getParentFile(), newFilename));
+//                        }
+//                    }
                     }
                 }
-
             };
 
 
@@ -253,6 +286,9 @@ public class MainActivity extends AppCompatActivity {
                     // We've been disconnected from this endpoint. No more data can be
                     // sent or received.
                     Log.d("app", "connection terminated, find a way to autostart");
+                    TextView textView = (TextView) findViewById(R.id.textbox0);
+                    textView.setText("disconnected from " + endpointId);
+
                     startAdvertising();
                     startDiscovery();
                 }
