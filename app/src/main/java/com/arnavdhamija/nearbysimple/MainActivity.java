@@ -1,13 +1,16 @@
 package com.arnavdhamija.nearbysimple;
 
 import android.Manifest;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.app.NotificationCompat;
 import android.support.v4.util.SimpleArrayMap;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v4.content.ContextCompat;
@@ -43,6 +46,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 public class MainActivity extends AppCompatActivity {
     private final String codeName = CodenameGenerator.generate();
     private ConnectionsClient mConnectionClient;
+    private NotificationManager mNotificationManager;
     private String connectedEndpoint;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,6 +75,7 @@ public class MainActivity extends AppCompatActivity {
         }
         final String TAG = "app";
         mConnectionClient = Nearby.getConnectionsClient(this);
+        mNotificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         Log.d("app", "wofo: " + permissionCheck);
         startAdvertising();
         startDiscovery();
@@ -190,6 +195,20 @@ public class MainActivity extends AppCompatActivity {
                         });
     }
 
+    private NotificationCompat.Builder buildNotification(Payload payload, boolean isIncoming) {
+        NotificationCompat.Builder notification = new NotificationCompat.Builder(this).setContentTitle(isIncoming ? "Receiving..." : "Sending...");
+        long size = payload.asFile().getSize();
+        boolean indeterminate = false;
+        if (size == -1) {
+            // This is a stream payload, so we don't know the size ahead of time.
+            size = 100;
+            indeterminate = true;
+        }
+        notification.setProgress((int)size, 0, indeterminate);
+        return notification;
+    }
+
+
     private final PayloadCallback mPayloadCallback =
             new PayloadCallback() {
 //                private final SimpleArrayMap<Long, Payload> incomingPayloads = new SimpleArrayMap<>();
@@ -209,7 +228,9 @@ public class MainActivity extends AppCompatActivity {
                         }
                     } else if (payload.getType() == Payload.Type.FILE) {
                         Log.d("app", "Getting a file pyalod");
-                        
+//                        NotificationCompat.Builder notification = buildNotification(payload, true /*isIncoming*/);
+//                        mNotificationManager.notify((int) payload.getId(), notification.build());
+
                         // Add this to our tracking map, so that we can retrieve the payload later.
 //                        incomingPayloads.put(new Long(payload.getId()), payload);
                     }
