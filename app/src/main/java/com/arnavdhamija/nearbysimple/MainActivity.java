@@ -51,7 +51,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 public class MainActivity extends AppCompatActivity {
     private final String codeName = CodenameGenerator.generate();
     private ConnectionsClient mConnectionClient;
-    private NotificationManager mNotificationManager;
     private String connectedEndpoint;
 
     private void mylogger(String tag, String msg) {
@@ -139,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendWelcomeMessage() {
         String welcome = "welcome2beconnected from " + codeName + " to " + connectedEndpoint;
-        mConnectionClient.sendPayload(connectedEndpoint, Payload.fromBytes(welcome.getBytes(UTF_8)));
+        sendPayload(connectedEndpoint, Payload.fromBytes(welcome.getBytes(UTF_8)));
     }
 
     final static int PICK_IMAGE = 1; // required for getting the result from the image picker intent
@@ -178,7 +177,7 @@ public class MainActivity extends AppCompatActivity {
 //                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
                     Payload.File file = filePayload.asFile();
                     // Finally, send the file payload.
-                    mConnectionClient.sendPayload(connectedEndpoint, filePayload);
+                    sendPayload(connectedEndpoint, filePayload);
 //                    mylogger();("app", "successful send" + payloadFilenameMessage + " size " + file.getSize());
                     mylogger("app", "successful send to " + connectedEndpoint + " size " + file.getSize());
                 } catch (Exception e) {
@@ -199,6 +198,7 @@ public class MainActivity extends AppCompatActivity {
         NotificationCompat.Builder notification = buildNotification(payload, false);
         mNotificationManager.notify((int)payload.getId(), notification.build());
         outgoingPayloads.put(Long.valueOf(payload.getId()), notification);
+        mConnectionClient.sendPayload(endpointId, payload);
     }
 
     private void startAdvertising() {
@@ -275,7 +275,7 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onPayloadTransferUpdate(String payloadId, PayloadTransferUpdate update) {
-                    NotificationCompat.Builder notification;
+                    NotificationCompat.Builder notification = new NotificationCompat.Builder(getApplicationContext());
                     if (incomingPayloads.containsKey(payloadId)) {
                         notification = incomingPayloads.get(payloadId);
                         if (update.getStatus() != PayloadTransferUpdate.Status.IN_PROGRESS) {
@@ -312,7 +312,7 @@ public class MainActivity extends AppCompatActivity {
                             break;
                     }
 
-                    mNotificationManager.notify(payloadId, notification.build());
+                    mNotificationManager.notify(Integer.valueOf(payloadId), notification.build());
                 }
 
             };
