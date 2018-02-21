@@ -7,8 +7,10 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.NotificationCompat;
@@ -45,6 +47,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
@@ -141,7 +144,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendWelcomeMessage() {
         String welcome = "welcome2beconnected from " + codeName + " to " + connectedEndpoint;
-        sendPayload(connectedEndpoint, Payload.fromBytes(welcome.getBytes(UTF_8)));
+        mConnectionClient.sendPayload(connectedEndpoint, Payload.fromBytes(welcome.getBytes(UTF_8)));
     }
 
     final static int PICK_IMAGE = 1; // required for getting the result from the image picker intent
@@ -154,6 +157,28 @@ public class MainActivity extends AppCompatActivity {
         intent.setAction(Intent.ACTION_GET_CONTENT);
         intent.putExtra("endpointId", endpointId);
         startActivityForResult(Intent.createChooser(intent, "Select Picture"), PICK_IMAGE);
+    }
+
+    public String getFileName(Uri uri) {
+        String result = null;
+        if (uri.getScheme().equals("content")) {
+            Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    result = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME));
+                }
+            } finally {
+                cursor.close();
+            }
+        }
+        if (result == null) {
+            result = uri.getPath();
+            int cut = result.lastIndexOf('/');
+            if (cut != -1) {
+                result = result.substring(cut + 1);
+            }
+        }
+        return result;
     }
 
     @Override
@@ -173,11 +198,9 @@ public class MainActivity extends AppCompatActivity {
                     Payload filePayload = Payload.fromFile(pfd);
 
                     // Construct a simple message mapping the ID of the file payload to the desired filename.
-                    String payloadFilenameMessage = filePayload.getId() + ":" + uri.getLastPathSegment();
+                    String payloadFilenameMessage = filePayload.getId() + ":" + getFileName(uri);
 
                     // Send this message as a bytes payload.
-                    mConnectionClient.sendPayload(
-                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
                     Payload.File file = filePayload.asFile();
                     // Finally, send the file payload.
                     sendPayload(connectedEndpoint, filePayload, payloadFilenameMessage);
@@ -190,16 +213,35 @@ public class MainActivity extends AppCompatActivity {
     }
     private final SimpleArrayMap<Long, NotificationCompat.Builder> incomingPayloads = new SimpleArrayMap<>();
     private final SimpleArrayMap<Long, NotificationCompat.Builder> outgoingPayloads = new SimpleArrayMap<>();
+    private final SimpleArrayMap<Long, Payload> incomingPayloadReferences = new SimpleArrayMap<>();
+    private final SimpleArrayMap<Long, String> filePayloadFilenames = new SimpleArrayMap<>();
+
+    /**
+     * Extracts the payloadId and filename from the message and stores it in the
+     * filePayloadFilenames map. The format is payloadId:filename.
+     */
+    private void addPayloadFilename(String payloadFilenameMessage) {
+        int colonIndex = payloadFilenameMessage.indexOf(':');
+        String payloadId = payloadFilenameMessage.substring(0, colonIndex);
+        String filename = payloadFilenameMessage.substring(colonIndex + 1);
+        filePayloadFilenames.put(Long.valueOf(payloadId), filename);
+    }
+
 
     NotificationManager mNotificationManager;
     int notifId = 0;
-    private void sendPayload(String endpointId, Payload payload) {
+    private void sendPayload(String endpointId, Payload payload, String payloadFilenameMsg) {
         if (payload.getType() == Payload.Type.BYTES) {
             return;
         }
         NotificationCompat.Builder notification = buildNotification(payload, false);
         mNotificationManager.notify((int)payload.getId(), notification.build());
         outgoingPayloads.put(Long.valueOf(payload.getId()), notification);
+        try {
+            mConnectionClient.sendPayload(endpointId, Payload.fromBytes(payloadFilenameMsg.getBytes("UTF-8")));
+        } catch (UnsupportedEncodingException e) {
+            mylogger("app", "encode fail");
+        }
         mConnectionClient.sendPayload(endpointId, payload);
     }
 
@@ -249,7 +291,7 @@ public class MainActivity extends AppCompatActivity {
                     if (payload.getType() == Payload.Type.BYTES) {
                         try {
                             String payloadFilenameMessage = new String(payload.asBytes(), "UTF-8");
-
+                            addPayloadFilename(payloadFilenameMessage);
                             mylogger("app", "Getting a byte pyalod" + payloadFilenameMessage);
 //                            addPayloadFilename(payloadFilenameMessage);
                         } catch (Exception e) {
@@ -260,12 +302,13 @@ public class MainActivity extends AppCompatActivity {
                         NotificationCompat.Builder notification = buildNotification(payload, true /*isIncoming*/);
                         mNotificationManager.notify((int) payload.getId(), notification.build());
                         incomingPayloads.put(Long.valueOf(payload.getId()), notification);
+                        incomingPayloadReferences.put(payload.getId(), payload);
                     }
                 }
 
                 @Override
                 public void onPayloadTransferUpdate(String endpointId, PayloadTransferUpdate update) {
-                    NotificationCompat.Builder notification = new NotificationCompat.Builder(getApplicationContext());
+                    NotificationCompat.Builder notification = new NotificationCompat.Builder(getApplicationContext()).setSmallIcon(R.drawable.common_full_open_on_phone);
                     long payloadId = update.getPayloadId();
                     if (incomingPayloads.containsKey(payloadId)) {
                         notification = incomingPayloads.get(payloadId);
@@ -297,6 +340,15 @@ public class MainActivity extends AppCompatActivity {
                                     .setProgress(100, 100, false /* indeterminate */)
                                     .setContentText("Transfer complete!");
                             mylogger("app", "Transfer done");
+                            Payload payload = incomingPayloadReferences.remove(update.getPayloadId());
+                            String filename = filePayloadFilenames.remove(update.getPayloadId());
+                            if (payload != null) {
+                                File payloadFile = payload.asFile().asJavaFile();
+                                payloadFile.renameTo(new File(payloadFile.getParentFile(), filename));
+                                mylogger("app", "found N renamed");
+                            } else {
+                                mylogger("app", "NUll");
+                            }
                             break;
                         case Status.FAILURE:
                             notification
@@ -332,9 +384,15 @@ public class MainActivity extends AppCompatActivity {
                             textView.setText("Connection Established with " + endpointId);
                             connectedEndpoint = endpointId;
                             sendWelcomeMessage();
+                            mylogger("app", "stopping AD");
                             mConnectionClient.stopAdvertising();
                             mConnectionClient.stopDiscovery();
+                            mylogger("app", "stopped AD!!");
                             // We're connected! Can now start sending and receiving data.
+                            break;
+                        case ConnectionsStatusCodes.STATUS_ENDPOINT_IO_ERROR: //this code is ignored
+                            mylogger("app", "endpt error, restart");
+                            restartNearby();
                             break;
                         case ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED:
                             // The connection was rejected by one or both sides.
@@ -354,11 +412,17 @@ public class MainActivity extends AppCompatActivity {
                     mylogger("app", "connection terminated, find a way to autostart");
                     TextView textView = (TextView) findViewById(R.id.textbox0);
                     textView.setText("disconnected from " + endpointId);
-
-                    startAdvertising();
-                    startDiscovery();
+                    restartNearby();
                 }
             };
+
+    private void restartNearby() {
+        mylogger("app", "RestartingNearby");
+        mConnectionClient.stopAdvertising();
+        mConnectionClient.stopDiscovery();
+        startAdvertising();
+        startDiscovery();
+    }
 
     private final static int MAX_TRIES = 3;
     private final EndpointDiscoveryCallback mEndpointDiscoveryCallback =
@@ -367,6 +431,9 @@ public class MainActivity extends AppCompatActivity {
                 public void onEndpointFound(
                         String endpointId, DiscoveredEndpointInfo discoveredEndpointInfo) {
                     mylogger("app", "FOUND ENDPOINT: " + endpointId + "Info " + discoveredEndpointInfo.getEndpointName() + " id " + discoveredEndpointInfo.getServiceId());
+                    mConnectionClient.stopAdvertising();
+                    mConnectionClient.stopDiscovery();
+                    mylogger("app", "Stopping before requesting Conn");
                     mConnectionClient.requestConnection(
                             codeName,
                             endpointId,
@@ -381,10 +448,7 @@ public class MainActivity extends AppCompatActivity {
                             mylogger("app", "fail conn t_t" + e.getMessage());
 //                            if (e.getMessage().compareTo("STATUS_ENDPOINT_IO_ERROR")==0) {
 //                                mylogger("app", "restarting to try again");
-                                mConnectionClient.stopAdvertising();
-                                mConnectionClient.stopDiscovery();
-                                startAdvertising();
-                                startDiscovery();
+
 //                            }
                         }
                     });
