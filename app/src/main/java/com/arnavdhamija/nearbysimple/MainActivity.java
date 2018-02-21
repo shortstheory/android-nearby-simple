@@ -45,6 +45,8 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -56,14 +58,15 @@ public class MainActivity extends AppCompatActivity {
     private void mylogger(String tag, String msg) {
         Log.d(tag, msg);
         TextView logView = findViewById(R.id.logView);
-        logView.append(msg+"\n");
+        String timeStamp = new SimpleDateFormat("HH.mm.ss").format(new Date());
+        logView.append(timeStamp+' '+msg+"\n");
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
+        mNotificationManager = (NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE);
         int permissionCheck = ContextCompat.checkSelfPermission(this,
                 Manifest.permission.CHANGE_WIFI_STATE);
         if (ContextCompat.checkSelfPermission(this,
@@ -170,16 +173,15 @@ public class MainActivity extends AppCompatActivity {
                     Payload filePayload = Payload.fromFile(pfd);
 
                     // Construct a simple message mapping the ID of the file payload to the desired filename.
-//                    String payloadFilenameMessage = filePayload.getId() + ":" + uri.getLastPathSegment();
+                    String payloadFilenameMessage = filePayload.getId() + ":" + uri.getLastPathSegment();
 
                     // Send this message as a bytes payload.
-//                    mConnectionClient.sendPayload(
-//                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
+                    mConnectionClient.sendPayload(
+                            endpointId, Payload.fromBytes(payloadFilenameMessage.getBytes("UTF-8")));
                     Payload.File file = filePayload.asFile();
                     // Finally, send the file payload.
-                    sendPayload(connectedEndpoint, filePayload);
-//                    mylogger();("app", "successful send" + payloadFilenameMessage + " size " + file.getSize());
-                    mylogger("app", "successful send to " + connectedEndpoint + " size " + file.getSize());
+                    sendPayload(connectedEndpoint, filePayload, payloadFilenameMessage);
+                    mylogger("app", "successful send to " + connectedEndpoint + " size " + file.getSize() + " k/v " + payloadFilenameMessage);
                 } catch (Exception e) {
                     mylogger("app", "failsend" + e.getMessage());
                 }
@@ -189,8 +191,8 @@ public class MainActivity extends AppCompatActivity {
     private final SimpleArrayMap<Long, NotificationCompat.Builder> incomingPayloads = new SimpleArrayMap<>();
     private final SimpleArrayMap<Long, NotificationCompat.Builder> outgoingPayloads = new SimpleArrayMap<>();
 
-    NotificationManager mNotificationManager = (NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE);
-
+    NotificationManager mNotificationManager;
+    int notifId = 0;
     private void sendPayload(String endpointId, Payload payload) {
         if (payload.getType() == Payload.Type.BYTES) {
             return;
@@ -219,13 +221,14 @@ public class MainActivity extends AppCompatActivity {
                         new OnFailureListener() {
                             @Override
                             public void onFailure(@NonNull Exception e) {
+                                mylogger("app", "advert fail");
                                 // We were unable to start advertising.
                             }
                         });
     }
 
     private NotificationCompat.Builder buildNotification(Payload payload, boolean isIncoming) {
-        NotificationCompat.Builder notification = new NotificationCompat.Builder(this).setContentTitle(isIncoming ? "Receiving..." : "Sending...");
+        NotificationCompat.Builder notification = new NotificationCompat.Builder(this).setContentTitle(isIncoming ? "Receiving..." : "Sending...").setSmallIcon(R.drawable.common_full_open_on_phone);
         long size = payload.asFile().getSize();
         boolean indeterminate = false;
         if (size == -1) {
@@ -253,29 +256,17 @@ public class MainActivity extends AppCompatActivity {
 
                         }
                     } else if (payload.getType() == Payload.Type.FILE) {
-                        mylogger("app", "Getting a file pyalod");
+                        mylogger("app", "Getting a file pyalod " + payload.asFile().getSize());
                         NotificationCompat.Builder notification = buildNotification(payload, true /*isIncoming*/);
                         mNotificationManager.notify((int) payload.getId(), notification.build());
                         incomingPayloads.put(Long.valueOf(payload.getId()), notification);
                     }
                 }
 
-                /**
-                 * Extracts the payloadId and filename from the message and stores it in the
-                 * filePayloadFilenames map. The format is payloadId:filename.
-                 */
-                private void addPayloadFilename(String payloadFilenameMessage) {
-                    int colonIndex = payloadFilenameMessage.indexOf(':');
-                    String payloadId = payloadFilenameMessage.substring(0, colonIndex);
-                    String filename = payloadFilenameMessage.substring(colonIndex + 1);
-//                    filePayloadFilenames.put(Long.parseLong(payloadId), filename);
-                }
-
-
-
                 @Override
-                public void onPayloadTransferUpdate(String payloadId, PayloadTransferUpdate update) {
+                public void onPayloadTransferUpdate(String endpointId, PayloadTransferUpdate update) {
                     NotificationCompat.Builder notification = new NotificationCompat.Builder(getApplicationContext());
+                    long payloadId = update.getPayloadId();
                     if (incomingPayloads.containsKey(payloadId)) {
                         notification = incomingPayloads.get(payloadId);
                         if (update.getStatus() != PayloadTransferUpdate.Status.IN_PROGRESS) {
@@ -293,6 +284,7 @@ public class MainActivity extends AppCompatActivity {
                     switch(update.getStatus()) {
                         case Status.IN_PROGRESS:
                             int size = (int)update.getTotalBytes();
+//                            mylogger("app", "Bytes transferred " + update.getBytesTransferred());
                             if (size == -1) {
                                 // This is a stream payload, so we don't need to update anything at this point.
                                 return;
@@ -304,6 +296,7 @@ public class MainActivity extends AppCompatActivity {
                             notification
                                     .setProgress(100, 100, false /* indeterminate */)
                                     .setContentText("Transfer complete!");
+                            mylogger("app", "Transfer done");
                             break;
                         case Status.FAILURE:
                             notification
@@ -312,7 +305,7 @@ public class MainActivity extends AppCompatActivity {
                             break;
                     }
 
-                    mNotificationManager.notify(Integer.valueOf(payloadId), notification.build());
+                    mNotificationManager.notify((int)payloadId, notification.build());
                 }
 
             };
@@ -386,8 +379,13 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onFailure(@NonNull Exception e) {
                             mylogger("app", "fail conn t_t" + e.getMessage());
-//                            startAdvertising();
-//                            startDiscovery();
+//                            if (e.getMessage().compareTo("STATUS_ENDPOINT_IO_ERROR")==0) {
+//                                mylogger("app", "restarting to try again");
+                                mConnectionClient.stopAdvertising();
+                                mConnectionClient.stopDiscovery();
+                                startAdvertising();
+                                startDiscovery();
+//                            }
                         }
                     });
                 }
